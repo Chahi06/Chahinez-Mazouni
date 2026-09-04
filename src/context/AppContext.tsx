@@ -1,4 +1,17 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { auth, googleProvider, signInWithPopup, fbSignOut } from '../lib/firebase';
+import {
+  syncUserProfileToFirestore,
+  saveUserProgressToFirestore,
+  getUserProgressFromFirestore,
+} from '../services/firestoreService';
+import {
+  initialAcademicLevels,
+  initialSubjects,
+  initialSubscriptionPlans,
+  initialNotifications,
+} from '../data/initialData';
 import type {
   User,
   Subject,
@@ -100,11 +113,53 @@ interface AppContextType {
   updatePlanPrice: (planId: string, priceDzd: number) => Promise<boolean>;
   broadcastNotification: (title: string, message: string, type?: string, link?: string) => Promise<boolean>;
   updatePlatformSettings: (settings: Partial<PlatformSettings>) => Promise<boolean>;
+  firebaseUser: FirebaseUser | null;
+  signInWithGoogle: () => Promise<void>;
+  signOutUser: () => Promise<void>;
+}
+
+function parseHashLocation(): { view: AppView; params: NavigationParams } {
+  if (typeof window === 'undefined') return { view: 'home', params: {} };
+  const rawHash = window.location.hash.replace(/^#\/?/, '').trim();
+  if (!rawHash) return { view: 'home', params: {} };
+
+  const [pathPart, queryPart] = rawHash.split('?');
+  const validViews: AppView[] = [
+    'home',
+    'subjects',
+    'subject-detail',
+    'lesson-detail',
+    'summaries',
+    'quizzes',
+    'quiz-play',
+    'progress',
+    'favorites',
+    'subscription',
+    'profile',
+    'notifications',
+    'admin',
+    'search',
+  ];
+
+  const view = validViews.includes(pathPart as AppView) ? (pathPart as AppView) : 'home';
+  const params: NavigationParams = {};
+
+  if (queryPart) {
+    const sp = new URLSearchParams(queryPart);
+    if (sp.has('subjectId')) params.subjectId = sp.get('subjectId')!;
+    if (sp.has('lessonId')) params.lessonId = sp.get('lessonId')!;
+    if (sp.has('quizId')) params.quizId = sp.get('quizId')!;
+    if (sp.has('tab')) params.tab = sp.get('tab')!;
+  }
+
+  return { view, params };
 }
 
 const AppContext = createContext<AppContextType | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  const initialRoute = parseHashLocation();
+
   const [currentUser, setCurrentUser] = useState<User>({
     id: 'usr-student-free',
     name: 'أمين بن علي',
@@ -117,11 +172,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     isActive: true,
   });
 
-  const [academicLevels, setAcademicLevels] = useState<AcademicLevel[]>([]);
+  const [academicLevels, setAcademicLevels] = useState<AcademicLevel[]>(initialAcademicLevels);
   const [selectedLevel, setSelectedLevel] = useState<string>('السنة الأولى - لغة عربية');
-  const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>([]);
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>(initialSubjects);
+  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>(initialSubscriptionPlans);
+  const [notifications, setNotifications] = useState<AppNotification[]>(initialNotifications);
   const [studentProgress, setStudentProgress] = useState<{
     completedLessons: string[];
     quizResults: QuizResult[];
@@ -149,8 +204,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   });
 
   const [fontScale, setFontScale] = useState<'normal' | 'large' | 'xlarge'>('normal');
-  const [currentView, setCurrentView] = useState<AppView>('home');
-  const [navParams, setNavParams] = useState<NavigationParams>({});
+  const [currentView, setCurrentView] = useState<AppView>(initialRoute.view);
+  const [navParams, setNavParams] = useState<NavigationParams>(initialRoute.params);
   const [toasts, setToasts] = useState<ToastInfo[]>([]);
 
   const [premiumModalOpen, setPremiumModalOpen] = useState(false);
@@ -160,6 +215,79 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     open: false,
     pdf: null,
   });
+
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+
+  // Sync Firebase Auth State
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      setFirebaseUser(fbUser);
+      if (fbUser && fbUser.email) {
+        try {
+          // Sync with backend session
+          const res = await fetch('/api/auth/firebase-sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              uid: fbUser.uid,
+              email: fbUser.email,
+              displayName: fbUser.displayName,
+              photoURL: fbUser.photoURL,
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setCurrentUser(data.user);
+            // Sync to Firestore profile
+            await syncUserProfileToFirestore({
+              uid: fbUser.uid,
+              name: fbUser.displayName || data.user.name,
+              email: fbUser.email,
+              role: data.user.role,
+              subscriptionStatus: data.user.subscriptionStatus,
+            });
+            // Try fetching stored progress from Firestore
+            const cloudProgress = await getUserProgressFromFirestore(fbUser.uid);
+            if (cloudProgress) {
+              setStudentProgress((prev) => ({
+                ...prev,
+                completedLessons: cloudProgress.completedLessons || prev.completedLessons,
+                favoriteLessons: cloudProgress.favoriteLessons || prev.favoriteLessons,
+                favoriteSummaries: cloudProgress.favoriteSummaries || prev.favoriteSummaries,
+              }));
+            }
+          }
+        } catch (err) {
+          console.error('Error syncing Firebase user profile:', err);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const signInWithGoogle = async () => {
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      if (result.user) {
+        showToast(`مرحباً بك ${result.user.displayName || 'يا زميلي المعلم'}! تم تسجيل الدخول عبر Google بنجاح`, 'success');
+      }
+    } catch (err: any) {
+      console.error('Google Sign In Error:', err);
+      showToast('تعذر تسجيل الدخول عبر Google، يرجى المحاولة مجدداً', 'error');
+    }
+  };
+
+  const signOutUser = async () => {
+    try {
+      await fbSignOut(auth);
+      setFirebaseUser(null);
+      await switchDemoUser('student', 'free');
+      showToast('تم تسجيل الخروج بنجاح', 'info');
+    } catch (err) {
+      console.error('Sign Out Error:', err);
+    }
+  };
 
   // Load initial data
   const refreshBootstrap = async () => {
@@ -210,10 +338,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
+  useEffect(() => {
+    const handleLocationChange = () => {
+      const { view, params } = parseHashLocation();
+      setCurrentView(view);
+      setNavParams(params);
+    };
+
+    window.addEventListener('popstate', handleLocationChange);
+    window.addEventListener('hashchange', handleLocationChange);
+
+    return () => {
+      window.removeEventListener('popstate', handleLocationChange);
+      window.removeEventListener('hashchange', handleLocationChange);
+    };
+  }, []);
+
   const navigateTo = (view: AppView, params: NavigationParams = {}) => {
     setCurrentView(view);
     setNavParams(params);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    try {
+      const q = new URLSearchParams();
+      if (params.subjectId) q.set('subjectId', params.subjectId);
+      if (params.lessonId) q.set('lessonId', params.lessonId);
+      if (params.quizId) q.set('quizId', params.quizId);
+      if (params.tab) q.set('tab', params.tab);
+      const queryStr = q.toString() ? `?${q.toString()}` : '';
+      const newHash = view === 'home' ? '' : `#${view}${queryStr}`;
+      if (window.location.hash !== newHash) {
+        window.history.pushState(null, '', newHash || window.location.pathname);
+      }
+    } catch {
+      // Safe fallback if history API is restricted in sandbox
+    }
   };
 
   const openPremiumModal = (reason = 'هذا المحتوى متاح لأعضاء باقة Premium') => {
@@ -633,6 +792,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         updatePlanPrice,
         broadcastNotification,
         updatePlatformSettings,
+        firebaseUser,
+        signInWithGoogle,
+        signOutUser,
       }}
     >
       {children}

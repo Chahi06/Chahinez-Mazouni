@@ -13,28 +13,67 @@ import {
   CheckCircle2,
   AlertCircle,
   HelpCircle,
+  Copy,
+  UploadCloud,
+  Smartphone,
+  Send,
+  MessageCircle,
+  Building2,
+  FileCheck,
 } from 'lucide-react';
 
 export function SubscriptionPage() {
-  const { subscriptionPlans, currentUser, showToast, refreshBootstrap, navigateTo } = useApp();
+  const { subscriptionPlans, currentUser, platformSettings, showToast, refreshBootstrap, navigateTo } = useApp();
 
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan | null>(null);
   const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<'edahabia' | 'cib' | 'baridimob'>('edahabia');
+  const [paymentMethod, setPaymentMethod] = useState<'baridimob' | 'ccp' | 'edahabia' | 'cib'>('baridimob');
   const [cardNumber, setCardNumber] = useState('5020 0000 1234 5678');
   const [cardHolder, setCardHolder] = useState(currentUser.name || 'أمين بن علي');
   const [expiry, setExpiry] = useState('12/28');
   const [cvv, setCvv] = useState('123');
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // Offline transfer form state (BaridiMob & CCP)
+  const [transferRef, setTransferRef] = useState('');
+  const [senderPhone, setSenderPhone] = useState('');
+  const [receiptUrl, setReceiptUrl] = useState('');
+  const [receiptFileName, setReceiptFileName] = useState('');
+  const [copiedText, setCopiedText] = useState<string | null>(null);
+
   const isAlreadyPremium = currentUser.subscriptionStatus === 'premium';
+
+  const copyToClipboard = (text: string, label: string) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopiedText(label);
+    showToast(`تم نسخ ${label} إلى الحافظة بنجاح`, 'info');
+    setTimeout(() => setCopiedText(null), 2500);
+  };
+
+  const handleReceiptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        showToast('حجم الصورة كبير، يرجى اختيار ملف بحجم أقل من 5 ميغابايت', 'error');
+        return;
+      }
+      setReceiptFileName(file.name);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setReceiptUrl(reader.result as string);
+        showToast('تم تحميل صورة الوصل بنجاح', 'success');
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const handleStartCheckout = (plan: SubscriptionPlan) => {
     setSelectedPlan(plan);
     setCheckoutModalOpen(true);
   };
 
-  const handleConfirmPayment = async (e: React.FormEvent) => {
+  const handleConfirmCardPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPlan) return;
 
@@ -46,10 +85,9 @@ export function SubscriptionPage() {
         body: JSON.stringify({
           planId: selectedPlan.id,
           paymentMethod,
-          cardInfo: {
-            cardNumber,
-            holderName: cardHolder,
-          },
+          cardNumber,
+          cardExpiry: expiry,
+          cvv,
         }),
       });
       const data = await res.json();
@@ -57,9 +95,7 @@ export function SubscriptionPage() {
         setCheckoutModalOpen(false);
         await refreshBootstrap();
         showToast(
-          `تهانينا! تم تفعيل اشتراكك في باقة (${selectedPlan.name}) بنجاح عبر ${
-            paymentMethod === 'edahabia' ? 'البطاقة الذهبية' : 'CIB'
-          } 🎉`,
+          `تهانينا! تم تفعيل اشتراكك في باقة (${selectedPlan.nameAr || selectedPlan.name}) بنجاح 🎉`,
           'success'
         );
       } else {
@@ -70,6 +106,59 @@ export function SubscriptionPage() {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleOfflineTransferSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPlan) return;
+
+    if (!transferRef && !receiptUrl) {
+      showToast('يرجى إدخال رقم المعاملة أو إرفاق صورة وصل التحويل', 'error');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const res = await fetch('/api/payments/offline-transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          planId: selectedPlan.id,
+          method: paymentMethod === 'ccp' ? 'CCP' : 'BaridiMob',
+          transactionRef: transferRef,
+          senderPhone,
+          receiptUrl,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setCheckoutModalOpen(false);
+        setTransferRef('');
+        setReceiptUrl('');
+        setReceiptFileName('');
+        await refreshBootstrap();
+        showToast('تم إرسال طلب الاشتراك ووصل التحويل بنجاح! سيتم تفعيل حسابك فور مراجعة المشرف 👍', 'success');
+      } else {
+        showToast(data.error || 'فشل إرسال الطلب', 'error');
+      }
+    } catch (err) {
+      showToast('تعذر إرسال الطلب، يرجى المحاولة لاحقاً', 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const generateWhatsAppLink = () => {
+    const rawPhone = (platformSettings.contactPhone || '0550123456').replace(/\s+/g, '');
+    const cleanPhone = rawPhone.startsWith('0') ? `213${rawPhone.slice(1)}` : rawPhone;
+    const text = encodeURIComponent(
+      `السلام عليكم أستاذ، قمت بتحويل مبلغ اشتراك باقة (${selectedPlan?.nameAr || selectedPlan?.name}) وقدره ${selectedPlan?.priceDzd} دج.\n` +
+      `👤 الاسم: ${currentUser.name}\n` +
+      `📧 البريد: ${currentUser.email}\n` +
+      (transferRef ? `🔢 رقم العملية: ${transferRef}\n` : '') +
+      `أرجو تفعيل حسابي، وبارك الله فيكم.`
+    );
+    return `https://wa.me/${cleanPhone}?text=${text}`;
   };
 
   return (
@@ -282,116 +371,399 @@ export function SubscriptionPage() {
               </span>
             </div>
 
-            <form onSubmit={handleConfirmPayment} className="space-y-4">
-              {/* Payment Method Selector */}
-              <div>
-                <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-2">
-                  طريقة الدفع في الجزائر:
-                </label>
-                <div className="grid grid-cols-2 gap-3">
+            {/* Payment Method Selector Tabs */}
+            <div className="mb-6">
+              <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-2">
+                اختر طريقة الدفع المناسبة لك في الجزائر:
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('baridimob')}
+                  className={`p-2.5 rounded-xl border-2 flex flex-col items-center justify-center gap-1 text-xs font-bold transition-all ${
+                    paymentMethod === 'baridimob'
+                      ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 shadow-xs'
+                      : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800'
+                  }`}
+                >
+                  <Smartphone className="w-4 h-4 text-emerald-600" />
+                  <span className="text-[11px]">بريدي موب RIP</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('ccp')}
+                  className={`p-2.5 rounded-xl border-2 flex flex-col items-center justify-center gap-1 text-xs font-bold transition-all ${
+                    paymentMethod === 'ccp'
+                      ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 shadow-xs'
+                      : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800'
+                  }`}
+                >
+                  <Building2 className="w-4 h-4 text-amber-600" />
+                  <span className="text-[11px]">حوالة بريد CCP</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('edahabia')}
+                  className={`p-2.5 rounded-xl border-2 flex flex-col items-center justify-center gap-1 text-xs font-bold transition-all ${
+                    paymentMethod === 'edahabia' || paymentMethod === 'cib'
+                      ? 'border-teal-600 bg-teal-50/70 dark:bg-teal-950/40 text-teal-900 dark:text-teal-200 shadow-xs'
+                      : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800'
+                  }`}
+                >
+                  <CreditCard className="w-4 h-4 text-teal-600" />
+                  <span className="text-[11px]">البطاقة الذهبية / CIB</span>
+                </button>
+              </div>
+            </div>
+
+            {/* TAB 1: BaridiMob RIP Transfer */}
+            {paymentMethod === 'baridimob' && (
+              <div className="space-y-4 text-right">
+                {/* Account Details Box */}
+                <div className="p-4 rounded-2xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300">
+                      بيانات التحويل عبر تطبيق BaridiMob:
+                    </span>
+                    <span className="text-[10px] bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 px-2 py-0.5 rounded-full font-bold">
+                      تحويل فوري
+                    </span>
+                  </div>
+
+                  {/* RIP Display */}
+                  <div className="bg-white dark:bg-stone-900 p-3 rounded-xl border border-emerald-200/80 dark:border-emerald-900 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(platformSettings.baridiMobRip || '00799999002145896345', 'رقم RIP')}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1 shrink-0 transition-colors"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>{copiedText === 'رقم RIP' ? 'تم النسخ!' : 'نسخ RIP'}</span>
+                    </button>
+                    <div className="text-left font-mono font-bold text-stone-800 dark:text-stone-100 text-sm tracking-wider" dir="ltr">
+                      {platformSettings.baridiMobRip || '00799999002145896345'}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs text-stone-600 dark:text-stone-300 pt-1">
+                    <div>
+                      <span className="text-stone-400 block text-[10px]">صاحب الحساب:</span>
+                      <span className="font-bold">{platformSettings.accountHolder || 'الأستاذ المشرف'}</span>
+                    </div>
+                    <div>
+                      <span className="text-stone-400 block text-[10px]">المبلغ المطلوب:</span>
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400">{selectedPlan.priceDzd} دج</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Form to submit proof of payment */}
+                <form onSubmit={handleOfflineTransferSubmit} className="space-y-3.5 pt-1">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+                      رقم العملية أو المعاملة (N° Transaction):
+                    </label>
+                    <input
+                      type="text"
+                      value={transferRef}
+                      onChange={(e) => setTransferRef(e.target.value)}
+                      placeholder="مثال: 987654321 أو لقطة شاشة"
+                      className="w-full px-3.5 py-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-xs font-mono text-stone-900 dark:text-stone-100 focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+                      رقم هاتفك للتواصل والتأكيد:
+                    </label>
+                    <input
+                      type="tel"
+                      value={senderPhone}
+                      onChange={(e) => setSenderPhone(e.target.value)}
+                      placeholder="05 / 06 / 07 ..."
+                      dir="ltr"
+                      className="w-full px-3.5 py-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100 focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+
+                  {/* Receipt Upload */}
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+                      إرفاق لقطة شاشة وصل التحويل من بريدي موب:
+                    </label>
+                    <label className="border-2 border-dashed border-stone-300 dark:border-stone-700 hover:border-emerald-500 rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer bg-stone-50 dark:bg-stone-800/60 transition-colors">
+                      <UploadCloud className="w-6 h-6 text-stone-400 mb-1" />
+                      <span className="text-xs font-medium text-stone-600 dark:text-stone-300">
+                        {receiptFileName ? receiptFileName : 'اضغط لاختيار صورة وصل التحويل'}
+                      </span>
+                      <span className="text-[10px] text-stone-400 mt-0.5">JPG, PNG (أقل من 5 ميغابايت)</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleReceiptUpload}
+                        className="hidden"
+                      />
+                    </label>
+                    {receiptUrl && (
+                      <div className="mt-2 flex items-center gap-2 p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-xs">
+                        <FileCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span className="truncate">تم تجهيز صورة الوصل للإرسال</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-2 space-y-2">
+                    <button
+                      type="submit"
+                      disabled={isProcessing}
+                      className="w-full py-3 px-4 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-600/25 transition-all text-xs disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      <Send className="w-4 h-4" />
+                      <span>{isProcessing ? 'جاري إرسال الطلب...' : 'إرسال طلب الاشتراك مع الوصل'}</span>
+                    </button>
+
+                    {/* WhatsApp option */}
+                    <a
+                      href={generateWhatsAppLink()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full py-2.5 px-4 rounded-xl font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100/70 hover:bg-emerald-100 dark:bg-emerald-950/60 transition-all text-xs flex items-center justify-center gap-2 border border-emerald-200 dark:border-emerald-800"
+                    >
+                      <MessageCircle className="w-4 h-4 text-emerald-600" />
+                      <span>إرسال الوصل مباشرة عبر WhatsApp للأستاذ المشرف</span>
+                    </a>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* TAB 2: CCP Postal Transfer */}
+            {paymentMethod === 'ccp' && (
+              <div className="space-y-4 text-right">
+                {/* Account Details Box */}
+                <div className="p-4 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                      بيانات الحساب البريدي الجاري (CCP):
+                    </span>
+                    <span className="text-[10px] bg-amber-200/60 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded-full font-bold">
+                      مكاتب البريد
+                    </span>
+                  </div>
+
+                  {/* CCP & Key Display */}
+                  <div className="bg-white dark:bg-stone-900 p-3 rounded-xl border border-amber-200 dark:border-amber-900 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(`${platformSettings.ccpNumber || '0021458963'} Clé ${platformSettings.ccpKey || '45'}`, 'رقم CCP')}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-1 shrink-0 transition-colors"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>{copiedText === 'رقم CCP' ? 'تم النسخ!' : 'نسخ الحساب'}</span>
+                    </button>
+                    <div className="text-left font-mono font-bold text-stone-800 dark:text-stone-100 text-sm tracking-wider" dir="ltr">
+                      CCP: {platformSettings.ccpNumber || '0021458963'} / Clé: {platformSettings.ccpKey || '45'}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs text-stone-600 dark:text-stone-300 pt-1">
+                    <div>
+                      <span className="text-stone-400 block text-[10px]">صاحب الحساب:</span>
+                      <span className="font-bold">{platformSettings.accountHolder || 'الأستاذ المشرف'}</span>
+                    </div>
+                    <div>
+                      <span className="text-stone-400 block text-[10px]">المبلغ المستحق:</span>
+                      <span className="font-bold text-amber-600 dark:text-amber-400">{selectedPlan.priceDzd} دج</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Form to submit proof of CCP payment */}
+                <form onSubmit={handleOfflineTransferSubmit} className="space-y-3.5 pt-1">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+                      رقم الحوالة أو وصل مكتب البريد:
+                    </label>
+                    <input
+                      type="text"
+                      value={transferRef}
+                      onChange={(e) => setTransferRef(e.target.value)}
+                      placeholder="رقم الوصل المختوم من البريد"
+                      className="w-full px-3.5 py-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100 focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+                      رقم الهاتف للتواصل:
+                    </label>
+                    <input
+                      type="tel"
+                      value={senderPhone}
+                      onChange={(e) => setSenderPhone(e.target.value)}
+                      placeholder="05 / 06 / 07 ..."
+                      dir="ltr"
+                      className="w-full px-3.5 py-2 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100 focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  {/* Receipt Upload */}
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+                      صورة وصل التحويل البريدي (Reçu):
+                    </label>
+                    <label className="border-2 border-dashed border-stone-300 dark:border-stone-700 hover:border-amber-500 rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer bg-stone-50 dark:bg-stone-800/60 transition-colors">
+                      <UploadCloud className="w-6 h-6 text-stone-400 mb-1" />
+                      <span className="text-xs font-medium text-stone-600 dark:text-stone-300">
+                        {receiptFileName ? receiptFileName : 'اضغط لاختيار صورة الوصل'}
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleReceiptUpload}
+                        className="hidden"
+                      />
+                    </label>
+                    {receiptUrl && (
+                      <div className="mt-2 flex items-center gap-2 p-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 text-xs">
+                        <FileCheck className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span className="truncate">تم تجهيز صورة الوصل</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-2 space-y-2">
+                    <button
+                      type="submit"
+                      disabled={isProcessing}
+                      className="w-full py-3 px-4 rounded-xl font-bold text-white bg-amber-600 hover:bg-amber-700 shadow-md shadow-amber-600/25 transition-all text-xs disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      <Send className="w-4 h-4" />
+                      <span>{isProcessing ? 'جاري إرسال الطلب...' : 'تأكيد وإرسال طلب الاشتراك'}</span>
+                    </button>
+
+                    <a
+                      href={generateWhatsAppLink()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full py-2.5 px-4 rounded-xl font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100/70 hover:bg-emerald-100 dark:bg-emerald-950/60 transition-all text-xs flex items-center justify-center gap-2 border border-emerald-200 dark:border-emerald-800"
+                    >
+                      <MessageCircle className="w-4 h-4 text-emerald-600" />
+                      <span>إرسال الوصل عبر WhatsApp للأستاذ</span>
+                    </a>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* TAB 3: Instant Card Checkout (Edahabia / CIB) */}
+            {(paymentMethod === 'edahabia' || paymentMethod === 'cib') && (
+              <form onSubmit={handleConfirmCardPayment} className="space-y-4">
+                <div className="grid grid-cols-2 gap-2 mb-2">
                   <button
                     type="button"
                     onClick={() => setPaymentMethod('edahabia')}
-                    className={`p-3 rounded-xl border-2 flex items-center justify-center gap-2 text-xs font-bold transition-all ${
+                    className={`p-2 rounded-lg border text-xs font-bold ${
                       paymentMethod === 'edahabia'
-                        ? 'border-amber-500 bg-amber-50/50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200'
-                        : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-400'
+                        ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200'
+                        : 'border-stone-200 dark:border-stone-700 text-stone-500'
                     }`}
                   >
-                    <span>البطاقة الذهبية Edahabia</span>
+                    البطاقة الذهبية Edahabia
                   </button>
-
                   <button
                     type="button"
                     onClick={() => setPaymentMethod('cib')}
-                    className={`p-3 rounded-xl border-2 flex items-center justify-center gap-2 text-xs font-bold transition-all ${
+                    className={`p-2 rounded-lg border text-xs font-bold ${
                       paymentMethod === 'cib'
-                        ? 'border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200'
-                        : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-400'
+                        ? 'border-teal-600 bg-teal-50 dark:bg-teal-950/40 text-teal-800 dark:text-teal-200'
+                        : 'border-stone-200 dark:border-stone-700 text-stone-500'
                     }`}
                   >
-                    <span>بطاقة CIB البنكية</span>
+                    بطاقة CIB البنكية
                   </button>
                 </div>
-              </div>
 
-              {/* Card Number */}
-              <div>
-                <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
-                  رقم البطاقة (16 رقماً):
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={cardNumber}
-                  onChange={(e) => setCardNumber(e.target.value)}
-                  dir="ltr"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-sm font-mono text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              {/* Card Holder */}
-              <div>
-                <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
-                  اسم صاحب البطاقة (كما هو مكتوب):
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={cardHolder}
-                  onChange={(e) => setCardHolder(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              {/* Expiry & CVV */}
-              <div className="grid grid-cols-2 gap-3">
+                {/* Card Number */}
                 <div>
                   <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
-                    تاريخ الانتهاء:
+                    رقم البطاقة (16 رقماً):
                   </label>
                   <input
                     type="text"
                     required
-                    value={expiry}
-                    onChange={(e) => setExpiry(e.target.value)}
+                    value={cardNumber}
+                    onChange={(e) => setCardNumber(e.target.value)}
                     dir="ltr"
-                    placeholder="MM/YY"
                     className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-sm font-mono text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
+
+                {/* Card Holder */}
                 <div>
                   <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
-                    رمز الأمان (CVV):
+                    اسم صاحب البطاقة:
                   </label>
                   <input
-                    type="password"
+                    type="text"
                     required
-                    maxLength={4}
-                    value={cvv}
-                    onChange={(e) => setCvv(e.target.value)}
-                    dir="ltr"
-                    placeholder="123"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-sm font-mono text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    value={cardHolder}
+                    onChange={(e) => setCardHolder(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
-              </div>
 
-              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/40 text-amber-900 dark:text-amber-200 text-xs">
-                💡 <span className="font-bold">وضع المحاكاة التجريبي:</span> تم ملء بيانات تجريبية صالحة؛ يمكنك الضغط مباشرة على زر التأكيد لاختبار عملية الترقية الفورية!
-              </div>
+                {/* Expiry & CVV */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+                      تاريخ الانتهاء:
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={expiry}
+                      onChange={(e) => setExpiry(e.target.value)}
+                      dir="ltr"
+                      placeholder="MM/YY"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-sm font-mono text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+                      رمز الأمان (CVV):
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      maxLength={4}
+                      value={cvv}
+                      onChange={(e) => setCvv(e.target.value)}
+                      dir="ltr"
+                      placeholder="123"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-sm font-mono text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
 
-              <div className="pt-3">
-                <button
-                  type="submit"
-                  disabled={isProcessing}
-                  className="w-full py-3.5 px-6 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-600/25 transition-all text-sm disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  <Lock className="w-4 h-4" />
-                  <span>{isProcessing ? 'جاري معالجة الدفع والتحقق...' : `دفع ${selectedPlan.priceDzd} دج وتفعيل الاشتراك`}</span>
-                </button>
-              </div>
-            </form>
+                <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/40 text-amber-900 dark:text-amber-200 text-xs">
+                  💡 <span className="font-bold">وضع المحاكاة المباشر:</span> يمكنك الضغط مباشرة على زر التأكيد لاختبار عملية الترقية الإلكترونية الفورية!
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    disabled={isProcessing}
+                    className="w-full py-3.5 px-6 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-600/25 transition-all text-sm disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    <Lock className="w-4 h-4" />
+                    <span>{isProcessing ? 'جاري معالجة الدفع والتحقق...' : `دفع ${selectedPlan.priceDzd} دج وتفعيل الحساب`}</span>
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

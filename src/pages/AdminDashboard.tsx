@@ -20,6 +20,12 @@ import {
   ArrowRight,
   CheckCircle2,
   X,
+  Smartphone,
+  Building2,
+  Eye,
+  Copy,
+  ExternalLink,
+  MessageCircle,
 } from 'lucide-react';
 
 export function AdminDashboard() {
@@ -50,11 +56,13 @@ export function AdminDashboard() {
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'subjects' | 'lessons' | 'summaries' | 'pdfs' | 'quizzes' | 'pricing' | 'users' | 'notifications' | 'settings'
+    'overview' | 'subjects' | 'lessons' | 'summaries' | 'pdfs' | 'quizzes' | 'pricing' | 'payments' | 'users' | 'notifications' | 'settings'
   >((navParams.tab as any) || 'overview');
 
   const [metrics, setMetrics] = useState<AdminMetrics | null>(null);
   const [usersList, setUsersList] = useState<User[]>([]);
+  const [paymentsList, setPaymentsList] = useState<PaymentTransaction[]>([]);
+  const [selectedReceiptImage, setSelectedReceiptImage] = useState<string | null>(null);
   const [allLessons, setAllLessons] = useState<Lesson[]>([]);
   const [allSummaries, setAllSummaries] = useState<Summary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -139,29 +147,56 @@ export function AdminDashboard() {
   const [settingsTagline, setSettingsTagline] = useState(platformSettings.tagline);
   const [settingsLogoText, setSettingsLogoText] = useState(platformSettings.logoText);
   const [settingsEmail, setSettingsEmail] = useState(platformSettings.supportEmail);
+  const [settingsCcpNumber, setSettingsCcpNumber] = useState(platformSettings.ccpNumber || '0021458963');
+  const [settingsCcpKey, setSettingsCcpKey] = useState(platformSettings.ccpKey || '45');
+  const [settingsBaridiMobRip, setSettingsBaridiMobRip] = useState(platformSettings.baridiMobRip || '00799999002145896345');
+  const [settingsAccountHolder, setSettingsAccountHolder] = useState(platformSettings.accountHolder || 'الأستاذ المشرف العام (azc1744)');
+  const [settingsContactPhone, setSettingsContactPhone] = useState(platformSettings.contactPhone || '0550 12 34 56');
+  const [settingsPaymentInstructions, setSettingsPaymentInstructions] = useState(
+    platformSettings.paymentInstructions ||
+      'يرجى تحويل مبلغ الاشتراك المحدد عبر تطبيق بريدي موب (BaridiMob) إلى رقم RIP الموضح، أو عبر مكتب البريد (حوالة CCP)، ثم إرفاق صورة الوصل أو رقم العملية ليتم تفعيل حسابك فوراً.'
+  );
+
+  const fetchAdminData = async () => {
+    setLoading(true);
+    try {
+      const [mRes, uRes, lRes, sRes, pRes] = await Promise.all([
+        fetch('/api/admin/metrics'),
+        fetch('/api/admin/users'),
+        fetch('/api/lessons'),
+        fetch('/api/summaries'),
+        fetch('/api/admin/payments'),
+      ]);
+      if (mRes.ok) setMetrics(await mRes.json());
+      if (uRes.ok) setUsersList(await uRes.json());
+      if (lRes.ok) setAllLessons(await lRes.json());
+      if (sRes.ok) setAllSummaries(await sRes.json());
+      if (pRes.ok) setPaymentsList(await pRes.json());
+    } catch (e) {
+      console.error('Failed to load admin data:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    async function fetchAdminData() {
-      setLoading(true);
-      try {
-        const [mRes, uRes, lRes, sRes] = await Promise.all([
-          fetch('/api/admin/metrics'),
-          fetch('/api/admin/users'),
-          fetch('/api/lessons'),
-          fetch('/api/summaries'),
-        ]);
-        if (mRes.ok) setMetrics(await mRes.json());
-        if (uRes.ok) setUsersList(await uRes.json());
-        if (lRes.ok) setAllLessons(await lRes.json());
-        if (sRes.ok) setAllSummaries(await sRes.json());
-      } catch (e) {
-        console.error('Failed to load admin data:', e);
-      } finally {
-        setLoading(false);
-      }
-    }
     fetchAdminData();
   }, []);
+
+  useEffect(() => {
+    if (platformSettings) {
+      setSettingsAppName(platformSettings.appName);
+      setSettingsTagline(platformSettings.tagline);
+      setSettingsLogoText(platformSettings.logoText);
+      setSettingsEmail(platformSettings.supportEmail);
+      if (platformSettings.ccpNumber) setSettingsCcpNumber(platformSettings.ccpNumber);
+      if (platformSettings.ccpKey) setSettingsCcpKey(platformSettings.ccpKey);
+      if (platformSettings.baridiMobRip) setSettingsBaridiMobRip(platformSettings.baridiMobRip);
+      if (platformSettings.accountHolder) setSettingsAccountHolder(platformSettings.accountHolder);
+      if (platformSettings.contactPhone) setSettingsContactPhone(platformSettings.contactPhone);
+      if (platformSettings.paymentInstructions) setSettingsPaymentInstructions(platformSettings.paymentInstructions);
+    }
+  }, [platformSettings]);
 
   const handleCreateSubject = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -391,7 +426,44 @@ export function AdminDashboard() {
       tagline: settingsTagline,
       logoText: settingsLogoText,
       supportEmail: settingsEmail,
+      ccpNumber: settingsCcpNumber,
+      ccpKey: settingsCcpKey,
+      baridiMobRip: settingsBaridiMobRip,
+      accountHolder: settingsAccountHolder,
+      contactPhone: settingsContactPhone,
+      paymentInstructions: settingsPaymentInstructions,
     });
+    showToast('تم حفظ إعدادات المنصة وحسابات الاستقبال بنجاح', 'success');
+  };
+
+  const handleApprovePayment = async (id: string) => {
+    try {
+      const res = await fetch(`/api/admin/payments/${id}/approve`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast('تم التحقق من الوصل وتفعيل اشتراك Premium للطالب بنجاح 🎉', 'success');
+        fetchAdminData();
+      } else {
+        showToast(data.error || 'فشلت العملية', 'error');
+      }
+    } catch (e) {
+      showToast('تعذر تأكيد العملية', 'error');
+    }
+  };
+
+  const handleRejectPayment = async (id: string) => {
+    try {
+      const res = await fetch(`/api/admin/payments/${id}/reject`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast('تم رفض طلب التحويل', 'info');
+        fetchAdminData();
+      } else {
+        showToast(data.error || 'فشلت العملية', 'error');
+      }
+    } catch (e) {
+      showToast('تعذر رفض العملية', 'error');
+    }
   };
 
   const handleToggleUserPremium = async (userId: string, currentStatus: string) => {
@@ -520,6 +592,21 @@ export function AdminDashboard() {
             }`}
           >
             الأسعار والباقات
+          </button>
+          <button
+            onClick={() => setActiveTab('payments')}
+            className={`pb-3 px-2.5 border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === 'payments'
+                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                : 'border-transparent text-stone-500 hover:text-stone-800'
+            }`}
+          >
+            <span>طلبات الاشتراكات والتحويلات</span>
+            {paymentsList.filter((p) => p.status === 'pending').length > 0 && (
+              <span className="bg-amber-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full">
+                {paymentsList.filter((p) => p.status === 'pending').length}
+              </span>
+            )}
           </button>
           <button
             onClick={() => setActiveTab('users')}
@@ -1658,7 +1745,216 @@ export function AdminDashboard() {
         </div>
       )}
 
-      {/* 8. Users Management */}
+      {/* 8. Payments & Student Transfers Management (BaridiMob & CCP) */}
+      {activeTab === 'payments' && (
+        <div className="space-y-6">
+          {/* Header & Overview Cards */}
+          <div className="bg-white dark:bg-stone-900 rounded-3xl border border-stone-200/80 dark:border-stone-800 p-6 shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h3 className="text-base font-bold text-stone-900 dark:text-stone-100 flex items-center gap-2">
+                  <CreditCard className="w-5 h-5 text-emerald-600" />
+                  <span>طلبات الاشتراكات والتحويلات المالية للطلبة</span>
+                </h3>
+                <p className="text-xs text-stone-500 mt-1">
+                  مراجعة تحويلات بريدي موب (BaridiMob RIP) وحوالات البريد (CCP)، والتحقق من وصولات الدفع لتفعيل الاشتراكات بنقرة واحدة.
+                </p>
+              </div>
+
+              <button
+                onClick={() => setActiveTab('settings')}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-stone-100 dark:bg-stone-800 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors flex items-center gap-2 shrink-0"
+              >
+                <Building2 className="w-4 h-4 text-emerald-600" />
+                <span>تعديل بيانات حسابك (CCP / بريدي موب)</span>
+              </button>
+            </div>
+
+            {/* Quick Stats Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="p-4 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/60 flex items-center justify-between">
+                <div>
+                  <span className="text-xs text-amber-800 dark:text-amber-300 block font-bold">بانتظار المراجعة والتأكيد</span>
+                  <span className="text-2xl font-black text-amber-900 dark:text-amber-100">
+                    {paymentsList.filter((p) => p.status === 'pending').length}
+                  </span>
+                </div>
+                <span className="p-2.5 rounded-xl bg-amber-200/60 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200">
+                  ⏳
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-900/60 flex items-center justify-between">
+                <div>
+                  <span className="text-xs text-emerald-800 dark:text-emerald-300 block font-bold">الاشتراكات المؤكدة</span>
+                  <span className="text-2xl font-black text-emerald-900 dark:text-emerald-100">
+                    {paymentsList.filter((p) => p.status === 'completed').length}
+                  </span>
+                </div>
+                <span className="p-2.5 rounded-xl bg-emerald-200/60 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200">
+                  ✓
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-teal-50/70 dark:bg-teal-950/30 border border-teal-200/80 dark:border-teal-900/60 flex items-center justify-between">
+                <div>
+                  <span className="text-xs text-teal-800 dark:text-teal-300 block font-bold">إجمالي المداخيل المسجلة</span>
+                  <span className="text-2xl font-black text-teal-900 dark:text-teal-100">
+                    {paymentsList
+                      .filter((p) => p.status === 'completed')
+                      .reduce((acc, p) => acc + (p.amountDzd || 0), 0)}{' '}
+                    دج
+                  </span>
+                </div>
+                <span className="p-2.5 rounded-xl bg-teal-200/60 dark:bg-teal-900/50 text-teal-800 dark:text-teal-200">
+                  💰
+                </span>
+              </div>
+            </div>
+
+            {/* Transactions Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-right text-xs">
+                <thead>
+                  <tr className="border-b border-stone-200 dark:border-stone-800 text-stone-400">
+                    <th className="py-3 px-3">الطالب</th>
+                    <th className="py-3 px-3">الباقة والمبلغ</th>
+                    <th className="py-3 px-3">طريقة الدفع</th>
+                    <th className="py-3 px-3">رقم العملية / الوصل</th>
+                    <th className="py-3 px-3">هاتف المشترك</th>
+                    <th className="py-3 px-3">الحالة</th>
+                    <th className="py-3 px-3">الإجراءات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-100 dark:divide-stone-800/60">
+                  {paymentsList.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-stone-400">
+                        لا توجد طلبات اشتراك أو تحويلات حالياً
+                      </td>
+                    </tr>
+                  ) : (
+                    paymentsList.map((tx) => (
+                      <tr key={tx.id} className="hover:bg-stone-50/50 dark:hover:bg-stone-800/30">
+                        <td className="py-3 px-3">
+                          <div className="font-bold text-stone-900 dark:text-stone-100">
+                            {tx.userName || tx.userEmail}
+                          </div>
+                          <div className="text-[11px] text-stone-400">{tx.userEmail}</div>
+                        </td>
+
+                        <td className="py-3 px-3">
+                          <div className="font-bold text-emerald-600 dark:text-emerald-400">
+                            {tx.amountDzd} دج
+                          </div>
+                          <div className="text-[11px] text-stone-500">{tx.planName}</div>
+                        </td>
+
+                        <td className="py-3 px-3">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold ${
+                              tx.method === 'BaridiMob'
+                                ? 'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-300'
+                                : tx.method === 'CCP'
+                                ? 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300'
+                                : 'bg-teal-100 text-teal-900 dark:bg-teal-950 dark:text-teal-300'
+                            }`}
+                          >
+                            {tx.method === 'BaridiMob' && <Smartphone className="w-3.5 h-3.5" />}
+                            {tx.method === 'CCP' && <Building2 className="w-3.5 h-3.5" />}
+                            {tx.method === 'BaridiMob'
+                              ? 'بريدي موب RIP'
+                              : tx.method === 'CCP'
+                              ? 'حوالة CCP'
+                              : tx.method}
+                          </span>
+                        </td>
+
+                        <td className="py-3 px-3">
+                          <div className="font-mono text-stone-700 dark:text-stone-300 text-[11px]">
+                            {tx.transactionRef || tx.cardNumberMasked || 'تحويل مباشر'}
+                          </div>
+                          {tx.transferReceiptUrl && (
+                            <button
+                              onClick={() => setSelectedReceiptImage(tx.transferReceiptUrl!)}
+                              className="mt-1 text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 flex items-center gap-1 text-[11px] font-bold"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>عرض صورة الوصل</span>
+                            </button>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3">
+                          {tx.senderPhone ? (
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono text-stone-700 dark:text-stone-300" dir="ltr">
+                                {tx.senderPhone}
+                              </span>
+                              <a
+                                href={`https://wa.me/213${tx.senderPhone.replace(/\s+/g, '').replace(/^0/, '')}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="p-1 rounded text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950"
+                                title="مراسلة عبر واتساب"
+                              >
+                                <MessageCircle className="w-3.5 h-3.5" />
+                              </a>
+                            </div>
+                          ) : (
+                            <span className="text-stone-400">-</span>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3">
+                          {tx.status === 'completed' && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                              مؤكد ✓
+                            </span>
+                          )}
+                          {tx.status === 'pending' && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 animate-pulse">
+                              قيد المراجعة ⏳
+                            </span>
+                          )}
+                          {tx.status === 'rejected' && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300">
+                              مرفوض ✕
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3">
+                          {tx.status === 'pending' ? (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => handleApprovePayment(tx.id)}
+                                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors shadow-xs flex items-center gap-1"
+                              >
+                                <span>تأكيد وتفعيل Premium</span>
+                              </button>
+                              <button
+                                onClick={() => handleRejectPayment(tx.id)}
+                                className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-950/50 dark:text-rose-400 transition-colors"
+                              >
+                                <span>رفض</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-stone-400 text-[11px]">مكتمل</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 9. Users Management */}
       {activeTab === 'users' && (
         <div className="space-y-6">
           <div className="bg-white dark:bg-stone-900 rounded-3xl border border-stone-200/80 dark:border-stone-800 p-6 shadow-sm space-y-4">
@@ -1769,65 +2065,213 @@ export function AdminDashboard() {
       {/* 10. Platform Settings */}
       {activeTab === 'settings' && (
         <div className="space-y-6">
-          <div className="p-6 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-sm space-y-4 max-w-2xl">
-            <div>
-              <h3 className="text-base font-bold text-stone-900 dark:text-stone-100 flex items-center gap-2">
-                <Settings className="w-5 h-5 text-emerald-600" />
-                <span>إعدادات وهوية المنصة</span>
-              </h3>
-              <p className="text-xs text-stone-500 mt-0.5">
-                تعديل اسم التطبيق، الشعار المكتوب، والشعار اللفظي.
-              </p>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* General Identity */}
+            <div className="p-6 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-sm space-y-4">
+              <div>
+                <h3 className="text-base font-bold text-stone-900 dark:text-stone-100 flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-emerald-600" />
+                  <span>إعدادات وهوية المنصة</span>
+                </h3>
+                <p className="text-xs text-stone-500 mt-0.5">
+                  تعديل اسم التطبيق، الشعار المكتوب، والشعار اللفظي.
+                </p>
+              </div>
+
+              <form onSubmit={handleSaveSettings} className="space-y-4 text-xs">
+                <div>
+                  <label className="block font-bold mb-1">اسم المنصة:</label>
+                  <input
+                    type="text"
+                    value={settingsAppName}
+                    onChange={(e) => setSettingsAppName(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1">نص الشعار (Logo Text):</label>
+                  <input
+                    type="text"
+                    value={settingsLogoText}
+                    onChange={(e) => setSettingsLogoText(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1">الشعار اللفظي (Tagline):</label>
+                  <input
+                    type="text"
+                    value={settingsTagline}
+                    onChange={(e) => setSettingsTagline(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1">البريد الإلكتروني للدعم:</label>
+                  <input
+                    type="email"
+                    value={settingsEmail}
+                    onChange={(e) => setSettingsEmail(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 rounded-xl font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                >
+                  حفظ التغييرات
+                </button>
+              </form>
             </div>
 
-            <form onSubmit={handleSaveSettings} className="space-y-4 text-xs">
+            {/* Payment & Banking Settings */}
+            <div className="p-6 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-sm space-y-4">
               <div>
-                <label className="block font-bold mb-1">اسم المنصة:</label>
-                <input
-                  type="text"
-                  value={settingsAppName}
-                  onChange={(e) => setSettingsAppName(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800"
-                />
+                <h3 className="text-base font-bold text-stone-900 dark:text-stone-100 flex items-center gap-2">
+                  <Building2 className="w-5 h-5 text-emerald-600" />
+                  <span>حسابات استقبال الأموال من المشتركين (CCP / بريدي موب)</span>
+                </h3>
+                <p className="text-xs text-stone-500 mt-0.5">
+                  هذه البيانات تظهر للطلاب في نافذة الاشتراك عندما يختارون الدفع عبر بريدي موب أو مكتب البريد CCP.
+                </p>
               </div>
 
-              <div>
-                <label className="block font-bold mb-1">نص الشعار (Logo Text):</label>
-                <input
-                  type="text"
-                  value={settingsLogoText}
-                  onChange={(e) => setSettingsLogoText(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800"
-                />
-              </div>
+              <form onSubmit={handleSaveSettings} className="space-y-4 text-xs">
+                <div className="p-3.5 rounded-2xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-900/40 space-y-3">
+                  <div className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                    <Smartphone className="w-4 h-4" />
+                    <span>بيانات تطبيق بريدي موب (BaridiMob RIP)</span>
+                  </div>
 
-              <div>
-                <label className="block font-bold mb-1">الشعار اللفظي (Tagline):</label>
-                <input
-                  type="text"
-                  value={settingsTagline}
-                  onChange={(e) => setSettingsTagline(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800"
-                />
-              </div>
+                  <div>
+                    <label className="block font-bold mb-1">رقم RIP الكامل (20 رقماً):</label>
+                    <input
+                      type="text"
+                      value={settingsBaridiMobRip}
+                      onChange={(e) => setSettingsBaridiMobRip(e.target.value)}
+                      placeholder="00799999002145896345"
+                      className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 font-mono tracking-wider font-bold text-emerald-700 dark:text-emerald-400"
+                    />
+                    <span className="text-[10px] text-stone-400 mt-0.5 block">
+                      يقوم الطالب بنسخ هذا الرقم ولصقه في تطبيق بريدي موب لتحويل المبلغ إليك مباشرة.
+                    </span>
+                  </div>
+                </div>
 
-              <div>
-                <label className="block font-bold mb-1">البريد الإلكتروني للدعم:</label>
-                <input
-                  type="email"
-                  value={settingsEmail}
-                  onChange={(e) => setSettingsEmail(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800"
-                />
-              </div>
+                <div className="p-3.5 rounded-2xl bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/40 space-y-3">
+                  <div className="font-bold text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+                    <Building2 className="w-4 h-4" />
+                    <span>بيانات الحساب البريدي الجاري (CCP)</span>
+                  </div>
 
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <label className="block font-bold mb-1">رقم الحساب الجاري (CCP):</label>
+                      <input
+                        type="text"
+                        value={settingsCcpNumber}
+                        onChange={(e) => setSettingsCcpNumber(e.target.value)}
+                        placeholder="0021458963"
+                        className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 font-mono font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold mb-1">المفتاح (Clé):</label>
+                      <input
+                        type="text"
+                        value={settingsCcpKey}
+                        onChange={(e) => setSettingsCcpKey(e.target.value)}
+                        placeholder="45"
+                        className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 font-mono font-bold"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold mb-1">اسم صاحب الحساب (المستفيد):</label>
+                    <input
+                      type="text"
+                      value={settingsAccountHolder}
+                      onChange={(e) => setSettingsAccountHolder(e.target.value)}
+                      placeholder="الأستاذ / الإدارة"
+                      className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold mb-1">رقم هاتف التأكيد وواتساب:</label>
+                    <input
+                      type="text"
+                      value={settingsContactPhone}
+                      onChange={(e) => setSettingsContactPhone(e.target.value)}
+                      placeholder="0550 12 34 56"
+                      className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1">تعليمات وإرشادات الدفع للطلاب:</label>
+                  <textarea
+                    rows={3}
+                    value={settingsPaymentInstructions}
+                    onChange={(e) => setSettingsPaymentInstructions(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-xs"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-2.5 rounded-xl font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors flex items-center justify-center gap-2"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>حفظ وتحديث معلومات الحسابات البنكية فوراً</span>
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lightbox Modal for Receipt Image */}
+      {selectedReceiptImage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+          <div className="relative max-w-2xl w-full bg-white dark:bg-stone-900 rounded-3xl p-4 shadow-2xl border border-stone-200 dark:border-stone-800">
+            <div className="flex items-center justify-between pb-3 border-b border-stone-200 dark:border-stone-800 mb-3">
+              <h4 className="font-bold text-sm text-stone-900 dark:text-stone-100 flex items-center gap-2">
+                <Eye className="w-4 h-4 text-emerald-600" />
+                <span>معاينة وصل التحويل المرسل من المشترك</span>
+              </h4>
               <button
-                type="submit"
-                className="px-6 py-2.5 rounded-xl font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                onClick={() => setSelectedReceiptImage(null)}
+                className="p-1 rounded-full text-stone-400 hover:text-stone-700 dark:hover:text-stone-200"
               >
-                حفظ التغييرات
+                <X className="w-5 h-5" />
               </button>
-            </form>
+            </div>
+
+            <div className="flex items-center justify-center max-h-[70vh] overflow-hidden rounded-2xl bg-stone-100 dark:bg-stone-950 p-2">
+              <img
+                src={selectedReceiptImage}
+                alt="وصل التحويل"
+                className="max-h-[65vh] w-auto object-contain rounded-xl shadow-md"
+              />
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setSelectedReceiptImage(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 transition-colors"
+              >
+                إغلاق
+              </button>
+            </div>
           </div>
         </div>
       )}

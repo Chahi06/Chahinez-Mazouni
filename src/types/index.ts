@@ -160,12 +160,17 @@ export interface PaymentTransaction {
   id: string;
   userId: string;
   userEmail: string;
+  userName?: string;
   planId: string;
   planName: string;
   amountDzd: number;
-  method: 'CIB' | 'Edahabia' | 'TEST';
-  cardNumberMasked: string;
-  status: 'completed' | 'pending' | 'failed';
+  method: 'CIB' | 'Edahabia' | 'BaridiMob' | 'CCP' | 'TEST';
+  cardNumberMasked?: string;
+  transferReceiptUrl?: string;
+  transactionRef?: string;
+  senderPhone?: string;
+  notes?: string;
+  status: 'completed' | 'pending' | 'rejected';
   createdAt: string;
 }
 
@@ -187,6 +192,12 @@ export interface PlatformSettings {
   supportEmail: string;
   enableGuestPreview: boolean;
   testModeNotice: string;
+  ccpNumber?: string;
+  ccpKey?: string;
+  baridiMobRip?: string;
+  accountHolder?: string;
+  contactPhone?: string;
+  paymentInstructions?: string;
 }
 
 export interface AdminMetrics {

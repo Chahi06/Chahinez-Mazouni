@@ -13,6 +13,8 @@ import {
   Sparkles,
   BookOpen,
   CheckCircle,
+  LogIn,
+  LogOut,
 } from 'lucide-react';
 
 export function Navbar() {
@@ -30,6 +32,9 @@ export function Navbar() {
     currentView,
     navigateTo,
     switchDemoUser,
+    firebaseUser,
+    signInWithGoogle,
+    signOutUser,
   } = useApp();
 
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
@@ -377,6 +382,48 @@ export function Navbar() {
                       المشرفة Admin
                     </button>
                   </div>
+                </div>
+
+                {/* Firebase Authentication Section */}
+                <div className="mt-2 pt-2 border-t border-stone-100 dark:border-stone-800 px-2">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-medium text-stone-500 dark:text-stone-400">سحابة Firebase:</span>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      متصل
+                    </span>
+                  </div>
+
+                  {firebaseUser ? (
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-stone-500 dark:text-stone-400 truncate">
+                        Google: {firebaseUser.email}
+                      </div>
+                      <button
+                        id="firebase-signout-btn"
+                        onClick={() => {
+                          setUserDropdownOpen(false);
+                          signOutUser();
+                        }}
+                        className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        <span>تسجيل الخروج من Google</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      id="firebase-google-login-btn"
+                      onClick={() => {
+                        setUserDropdownOpen(false);
+                        signInWithGoogle();
+                      }}
+                      className="w-full flex items-center justify-center gap-2 py-1.5 px-2.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors"
+                    >
+                      <LogIn className="w-3.5 h-3.5" />
+                      <span>تسجيل الدخول عبر Google</span>
+                    </button>
+                  )}
                 </div>
               </div>
             )}

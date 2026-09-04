@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import type {
   Subject,
@@ -35,7 +36,13 @@ let platformSettings: PlatformSettings = {
   primaryColor: '#059669', // Emerald
   supportEmail: 'contact@ostadhi.dz',
   enableGuestPreview: true,
-  testModeNotice: 'وضع التجربة مفعل: يمكنك تجربة الدفع بالبطاقة الذهبية و CIB مجاناً لاختبار ترقية الحساب.',
+  testModeNotice: 'وضع التجربة مفعل: يمكنك تجربة الدفع بالبطاقة الذهبية و CIB أو إرسال وصل بريدي موب تجريبياً.',
+  ccpNumber: '0021458963',
+  ccpKey: '45',
+  baridiMobRip: '00799999002145896345',
+  accountHolder: 'الأستاذ المشرف العام (azc1744)',
+  contactPhone: '0550 12 34 56',
+  paymentInstructions: 'يرجى تحويل مبلغ الاشتراك المحدد عبر تطبيق بريدي موب (BaridiMob) إلى رقم RIP الموضح، أو عبر مكتب البريد (حوالة CCP)، ثم إرفاق صورة الوصل أو رقم العملية ليتم تفعيل حسابك فوراً.',
 };
 
 let users: User[] = [
@@ -1022,6 +1029,41 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ success: true, user: currentUser });
 });
 
+app.post('/api/auth/firebase-sync', (req, res) => {
+  const { uid, email, displayName, photoURL } = req.body;
+  if (!email) return res.status(400).json({ error: 'البريد الإلكتروني مطلوب' });
+
+  const isAdminEmail = email.toLowerCase().trim() === 'azc1744@gmail.com';
+  let found = users.find((u) => u.email.toLowerCase() === email.toLowerCase().trim() || u.id === uid);
+
+  if (found) {
+    if (isAdminEmail) {
+      found.role = 'admin';
+      found.subscriptionStatus = 'premium';
+    }
+    if (displayName) found.name = displayName;
+    if (photoURL) found.avatar = photoURL;
+    currentUser = found;
+    return res.json({ success: true, user: currentUser });
+  }
+
+  const newUser: User = {
+    id: uid || `usr-${Date.now()}`,
+    name: displayName || email.split('@')[0] || 'طالب جديد',
+    email,
+    avatar: photoURL || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+    role: isAdminEmail ? 'admin' : 'student',
+    subscriptionStatus: isAdminEmail ? 'premium' : 'free',
+    subscriptionExpiresAt: null,
+    academicLevel: 'السنة الأولى - لغة عربية',
+    createdAt: new Date().toISOString(),
+    isActive: true,
+  };
+  users.push(newUser);
+  currentUser = newUser;
+  res.json({ success: true, user: currentUser });
+});
+
 app.post('/api/auth/register', (req, res) => {
   const { name, email, academicLevel } = req.body;
   if (!name || !email) {
@@ -1122,6 +1164,14 @@ app.delete('/api/subjects/:id', (req, res) => {
 });
 
 // 4. Lessons with Server-Side Premium Enforcing
+app.get('/api/lessons', (req, res) => {
+  const subjectId = req.query.subjectId as string | undefined;
+  if (subjectId) {
+    return res.json(lessons.filter((l) => l.subjectId === subjectId));
+  }
+  res.json(lessons);
+});
+
 app.get('/api/lessons/:id', (req, res) => {
   const lesson = lessons.find((l) => l.id === req.params.id);
   if (!lesson) return res.status(404).json({ error: 'الدرس غير موجود' });
@@ -1496,7 +1546,8 @@ app.put('/api/subscriptions/plans/:id', (req, res) => {
 });
 
 // Checkout Simulation for CIB / Edahabia
-app.post('/api/payments/checkout', (req, res) => {
+// Checkout Simulation for CIB / Edahabia / Online
+const handleCardCheckout = (req: any, res: any) => {
   const { planId, cardNumber, cardExpiry, cvv, paymentMethod } = req.body;
   const plan = subscriptionPlans.find((p) => p.id === planId);
   if (!plan) return res.status(404).json({ error: 'خطة الاشتراك غير صالحة' });
@@ -1528,6 +1579,7 @@ app.post('/api/payments/checkout', (req, res) => {
     id: `tx-${Date.now()}`,
     userId: currentUser.id,
     userEmail: currentUser.email,
+    userName: currentUser.name,
     planId: plan.id,
     planName: plan.nameAr,
     amountDzd: plan.priceDzd,
@@ -1555,6 +1607,102 @@ app.post('/api/payments/checkout', (req, res) => {
     transaction,
     user: currentUser,
   });
+};
+
+app.post('/api/payments/checkout', handleCardCheckout);
+app.post('/api/subscriptions/checkout', handleCardCheckout);
+
+// Offline payment transfer (BaridiMob RIP / CCP)
+app.post('/api/payments/offline-transfer', (req, res) => {
+  const { planId, method, transactionRef, senderPhone, receiptUrl, notes } = req.body;
+  const plan = subscriptionPlans.find((p) => p.id === planId);
+  if (!plan) return res.status(404).json({ error: 'خطة الاشتراك غير صالحة' });
+
+  const transaction: PaymentTransaction = {
+    id: `tx-${Date.now()}`,
+    userId: currentUser.id,
+    userEmail: currentUser.email,
+    userName: currentUser.name,
+    planId: plan.id,
+    planName: plan.nameAr,
+    amountDzd: plan.priceDzd,
+    method: method === 'CCP' ? 'CCP' : 'BaridiMob',
+    transactionRef: transactionRef || '',
+    senderPhone: senderPhone || '',
+    transferReceiptUrl: receiptUrl || '',
+    notes: notes || '',
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+  paymentTransactions.unshift(transaction);
+
+  // Notify student
+  notifications.unshift({
+    id: `notif-${Date.now()}`,
+    title: 'تم استلام طلب التحويل وهو قيد المعالجة ⏳',
+    message: `تم تسجيل طلب اشتراكك في باقة "${plan.nameAr}" عبر ${method === 'CCP' ? 'حوالة CCP' : 'بريدي موب BaridiMob'}. سيتم التفعيل فور مراجعة المشرف.`,
+    date: 'الآن',
+    type: 'subscription',
+    isRead: false,
+    link: '/subscription',
+  });
+
+  res.json({
+    success: true,
+    message: 'تم إرسال طلب الاشتراك بنجاح، سيقوم المشرف بالتحقق وتفعيل اشتراكك سريعاً',
+    transaction,
+  });
+});
+
+// Admin payments management
+app.get('/api/admin/payments', (req, res) => {
+  if (currentUser.role !== 'admin') return res.status(403).json({ error: 'غير مصرح' });
+  res.json(paymentTransactions);
+});
+
+app.post('/api/admin/payments/:id/approve', (req, res) => {
+  if (currentUser.role !== 'admin') return res.status(403).json({ error: 'غير مصرح' });
+  const tx = paymentTransactions.find((t) => t.id === req.params.id);
+  if (!tx) return res.status(404).json({ error: 'العملية غير موجودة' });
+
+  tx.status = 'completed';
+
+  const plan = subscriptionPlans.find((p) => p.id === tx.planId);
+  const durationMonths = plan?.durationMonths || 1;
+
+  const targetUser = users.find((u) => u.id === tx.userId || u.email === tx.userEmail);
+  if (targetUser) {
+    const expiresAt = new Date();
+    expiresAt.setMonth(expiresAt.getMonth() + durationMonths);
+    targetUser.subscriptionStatus = 'premium';
+    targetUser.subscriptionExpiresAt = expiresAt.toISOString();
+    if (currentUser.id === targetUser.id) {
+      currentUser.subscriptionStatus = 'premium';
+      currentUser.subscriptionExpiresAt = expiresAt.toISOString();
+    }
+  }
+
+  // Notify the student
+  notifications.unshift({
+    id: `notif-${Date.now()}`,
+    title: 'تم تفعيل باقة Premium بنجاح! 🎉',
+    message: `تم التحقق من تحويلك (${tx.method}) وتفعيل باقة "${tx.planName}". استمتع بكافة الميزات غير المحدودة.`,
+    date: 'الآن',
+    type: 'subscription',
+    isRead: false,
+    link: '/subjects',
+  });
+
+  res.json({ success: true, transaction: tx, user: targetUser });
+});
+
+app.post('/api/admin/payments/:id/reject', (req, res) => {
+  if (currentUser.role !== 'admin') return res.status(403).json({ error: 'غير مصرح' });
+  const tx = paymentTransactions.find((t) => t.id === req.params.id);
+  if (!tx) return res.status(404).json({ error: 'العملية غير موجودة' });
+
+  tx.status = 'rejected';
+  res.json({ success: true, transaction: tx });
 });
 
 // 10. Admin Dashboard
@@ -1618,6 +1766,22 @@ app.post('/api/admin/notifications', (req, res) => {
   res.json({ success: true, notification: newNotif });
 });
 
+app.get('/api/notifications', (req, res) => {
+  res.json(notifications);
+});
+
+app.get('/api/admin/notifications', (req, res) => {
+  res.json(notifications);
+});
+
+app.get('/api/subscription-plans', (req, res) => {
+  res.json(subscriptionPlans);
+});
+
+app.get('/api/platform/settings', (req, res) => {
+  res.json(platformSettings);
+});
+
 app.put('/api/admin/settings', (req, res) => {
   if (currentUser.role !== 'admin') return res.status(403).json({ error: 'غير مصرح' });
   platformSettings = { ...platformSettings, ...req.body };
@@ -1642,6 +1806,11 @@ app.get('/api/search', (req, res) => {
   });
 });
 
+// Catch-all 404 for unhandled /api/* endpoints to ensure JSON is always returned (never HTML)
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: `API route ${req.method} ${req.path} not found` });
+});
+
 // ----------------------
 // Vite Middleware & Startup
 // ----------------------
@@ -1653,10 +1822,24 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    // Resolve distPath safely across environments
+    let distPath = path.join(process.cwd(), 'dist');
+    if (!fs.existsSync(path.join(distPath, 'index.html'))) {
+      if (fs.existsSync(path.join(__dirname, 'index.html'))) {
+        distPath = __dirname;
+      } else if (fs.existsSync(path.join(process.cwd(), 'index.html'))) {
+        distPath = process.cwd();
+      }
+    }
+
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).send('Not Found');
+      }
     });
   }
 
