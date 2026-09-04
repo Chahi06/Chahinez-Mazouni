@@ -1,0 +1,647 @@
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import type {
+  User,
+  Subject,
+  Lesson,
+  Summary,
+  PDFFile,
+  Quiz,
+  QuizResult,
+  SubscriptionPlan,
+  AppNotification,
+  PlatformSettings,
+  AcademicLevel,
+  PaymentTransaction,
+  AdminMetrics,
+} from '../types/index.js';
+
+interface ToastInfo {
+  id: string;
+  message: string;
+  type: 'success' | 'error' | 'info';
+}
+
+export type AppView =
+  | 'home'
+  | 'subjects'
+  | 'subject-detail'
+  | 'lesson-detail'
+  | 'summaries'
+  | 'quizzes'
+  | 'quiz-play'
+  | 'progress'
+  | 'favorites'
+  | 'subscription'
+  | 'profile'
+  | 'notifications'
+  | 'admin'
+  | 'search';
+
+interface NavigationParams {
+  subjectId?: string;
+  lessonId?: string;
+  quizId?: string;
+  tab?: string;
+}
+
+interface AppContextType {
+  currentUser: User;
+  setCurrentUser: React.Dispatch<React.SetStateAction<User>>;
+  academicLevels: AcademicLevel[];
+  selectedLevel: string;
+  setSelectedLevel: (lvl: string) => void;
+  subjects: Subject[];
+  subscriptionPlans: SubscriptionPlan[];
+  notifications: AppNotification[];
+  unreadNotificationsCount: number;
+  markNotificationsAsRead: () => void;
+  studentProgress: {
+    completedLessons: string[];
+    quizResults: QuizResult[];
+    favoriteLessons: string[];
+    favoriteSummaries: string[];
+  };
+  platformSettings: PlatformSettings;
+  isDarkMode: boolean;
+  toggleDarkMode: () => void;
+  fontScale: 'normal' | 'large' | 'xlarge';
+  setFontScale: (scale: 'normal' | 'large' | 'xlarge') => void;
+  currentView: AppView;
+  navParams: NavigationParams;
+  navigateTo: (view: AppView, params?: NavigationParams) => void;
+  toasts: ToastInfo[];
+  showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
+  removeToast: (id: string) => void;
+  premiumModalOpen: boolean;
+  setPremiumModalOpen: (open: boolean) => void;
+  premiumModalReason: string;
+  openPremiumModal: (reason?: string) => void;
+  pdfViewerModal: { open: boolean; pdf: PDFFile | null };
+  openPdfViewer: (pdf: PDFFile) => void;
+  closePdfViewer: () => void;
+  switchDemoUser: (role: 'student' | 'admin', status?: 'free' | 'premium') => Promise<void>;
+  toggleLessonCompleted: (lessonId: string) => Promise<boolean>;
+  toggleFavorite: (type: 'lesson' | 'summary', id: string) => Promise<boolean>;
+  refreshBootstrap: () => Promise<void>;
+  // Admin helpers
+  updateSubject: (id: string, data: Partial<Subject>) => Promise<boolean>;
+  deleteSubject: (id: string) => Promise<boolean>;
+  addSubject: (data: Partial<Subject>) => Promise<boolean>;
+  addLesson: (data: Partial<Lesson>) => Promise<boolean>;
+  updateLesson: (id: string, data: Partial<Lesson>) => Promise<boolean>;
+  deleteLesson: (id: string) => Promise<boolean>;
+  addPdf: (data: Partial<PDFFile>) => Promise<boolean>;
+  deletePdf: (id: string) => Promise<boolean>;
+  addSummary: (data: Partial<Summary>) => Promise<boolean>;
+  updateSummary: (id: string, data: Partial<Summary>) => Promise<boolean>;
+  deleteSummary: (id: string) => Promise<boolean>;
+  addQuiz: (data: Partial<Quiz>) => Promise<boolean>;
+  deleteQuiz: (id: string) => Promise<boolean>;
+  updatePlanPrice: (planId: string, priceDzd: number) => Promise<boolean>;
+  broadcastNotification: (title: string, message: string, type?: string, link?: string) => Promise<boolean>;
+  updatePlatformSettings: (settings: Partial<PlatformSettings>) => Promise<boolean>;
+}
+
+const AppContext = createContext<AppContextType | null>(null);
+
+export function AppProvider({ children }: { children: React.ReactNode }) {
+  const [currentUser, setCurrentUser] = useState<User>({
+    id: 'usr-student-free',
+    name: 'أمين بن علي',
+    email: 'student@ostadhi.dz',
+    role: 'student',
+    subscriptionStatus: 'free',
+    subscriptionExpiresAt: null,
+    academicLevel: 'السنة الأولى - لغة عربية',
+    createdAt: new Date().toISOString(),
+    isActive: true,
+  });
+
+  const [academicLevels, setAcademicLevels] = useState<AcademicLevel[]>([]);
+  const [selectedLevel, setSelectedLevel] = useState<string>('السنة الأولى - لغة عربية');
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [studentProgress, setStudentProgress] = useState<{
+    completedLessons: string[];
+    quizResults: QuizResult[];
+    favoriteLessons: string[];
+    favoriteSummaries: string[];
+  }>({
+    completedLessons: [],
+    quizResults: [],
+    favoriteLessons: [],
+    favoriteSummaries: [],
+  });
+
+  const [platformSettings, setPlatformSettings] = useState<PlatformSettings>({
+    appName: 'أستاذي | سنة أولى تعليم ابتدائي',
+    tagline: 'المنصة الأكاديمية الأولى لطلبة المدرسة العليا للأساتذة والجامعات',
+    logoText: 'أستاذي',
+    primaryColor: '#059669',
+    supportEmail: 'contact@ostadhi.dz',
+    enableGuestPreview: true,
+    testModeNotice: 'وضع التجربة مفعل: يمكنك تجربة الدفع بالبطاقة الذهبية و CIB مجاناً لاختبار ترقية الحساب.',
+  });
+
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    return localStorage.getItem('ostadhi_dark_mode') === 'true';
+  });
+
+  const [fontScale, setFontScale] = useState<'normal' | 'large' | 'xlarge'>('normal');
+  const [currentView, setCurrentView] = useState<AppView>('home');
+  const [navParams, setNavParams] = useState<NavigationParams>({});
+  const [toasts, setToasts] = useState<ToastInfo[]>([]);
+
+  const [premiumModalOpen, setPremiumModalOpen] = useState(false);
+  const [premiumModalReason, setPremiumModalReason] = useState('هذا المحتوى متاح لأعضاء Premium');
+
+  const [pdfViewerModal, setPdfViewerModal] = useState<{ open: boolean; pdf: PDFFile | null }>({
+    open: false,
+    pdf: null,
+  });
+
+  // Load initial data
+  const refreshBootstrap = async () => {
+    try {
+      const res = await fetch('/api/bootstrap');
+      if (res.ok) {
+        const data = await res.json();
+        setCurrentUser(data.currentUser);
+        setAcademicLevels(data.academicLevels || []);
+        setSubjects(data.subjects || []);
+        setSubscriptionPlans(data.subscriptionPlans || []);
+        setNotifications(data.notifications || []);
+        setPlatformSettings(data.platformSettings);
+        if (data.studentProgress) {
+          setStudentProgress(data.studentProgress);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to bootstrap app data:', e);
+    }
+  };
+
+  useEffect(() => {
+    refreshBootstrap();
+  }, []);
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('ostadhi_dark_mode', 'true');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('ostadhi_dark_mode', 'false');
+    }
+  }, [isDarkMode]);
+
+  const toggleDarkMode = () => setIsDarkMode((prev) => !prev);
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      removeToast(id);
+    }, 4000);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const navigateTo = (view: AppView, params: NavigationParams = {}) => {
+    setCurrentView(view);
+    setNavParams(params);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const openPremiumModal = (reason = 'هذا المحتوى متاح لأعضاء باقة Premium') => {
+    setPremiumModalReason(reason);
+    setPremiumModalOpen(true);
+  };
+
+  const openPdfViewer = (pdf: PDFFile) => {
+    const isPremiumUser = currentUser.subscriptionStatus === 'premium' || currentUser.role === 'admin';
+    if (pdf.isPremium && !isPremiumUser) {
+      openPremiumModal(`الملف "${pdf.title}" محمي ومتاح حصرياً لمشتركي Premium.`);
+      return;
+    }
+    setPdfViewerModal({ open: true, pdf });
+  };
+
+  const closePdfViewer = () => {
+    setPdfViewerModal({ open: false, pdf: null });
+  };
+
+  const unreadNotificationsCount = notifications.filter((n) => !n.isRead).length;
+
+  const markNotificationsAsRead = () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+  };
+
+  const switchDemoUser = async (role: 'student' | 'admin', status: 'free' | 'premium' = 'free') => {
+    try {
+      const res = await fetch('/api/auth/switch-demo-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, status }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCurrentUser(data.user);
+        await refreshBootstrap();
+        showToast(
+          role === 'admin'
+            ? 'تم التبديل إلى حساب الإدارة (Admin) بنجاح'
+            : status === 'premium'
+            ? 'تم التبديل إلى حساب طالب مشترك (Premium) بنجاح'
+            : 'تم التبديل إلى حساب طالب مجاني (Free) بنجاح',
+          'info'
+        );
+      }
+    } catch (e) {
+      showToast('تعذر تبديل الحساب', 'error');
+    }
+  };
+
+  const toggleLessonCompleted = async (lessonId: string): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/progress/toggle-lesson', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lessonId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setStudentProgress((prev) => ({ ...prev, completedLessons: data.completedLessons }));
+        showToast(data.isCompleted ? 'رائع! تمت دراسة هذا الدرس بنجاح' : 'تم إلغاء تعليم الدرس كمكتمل', 'success');
+        return data.isCompleted;
+      }
+    } catch (e) {
+      showToast('حدث خطأ في تحديث التقدم', 'error');
+    }
+    return false;
+  };
+
+  const toggleFavorite = async (type: 'lesson' | 'summary', id: string): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/progress/toggle-favorite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, id }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (type === 'lesson') {
+          setStudentProgress((prev) => ({ ...prev, favoriteLessons: data.favoriteLessons }));
+        } else {
+          setStudentProgress((prev) => ({ ...prev, favoriteSummaries: data.favoriteSummaries }));
+        }
+        showToast(data.isFavorite ? 'تمت الإضافة إلى المفضلة ❤️' : 'تمت الإزالة من المفضلة', 'info');
+        return data.isFavorite;
+      }
+    } catch (e) {
+      showToast('تعذر تحديث المفضلة', 'error');
+    }
+    return false;
+  };
+
+  // Admin Actions
+  const updateSubject = async (id: string, data: Partial<Subject>): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/subjects/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تم تحديث بيانات المقياس بنجاح', 'success');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر تحديث المقياس', 'error');
+    }
+    return false;
+  };
+
+  const deleteSubject = async (id: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/subjects/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تم حذف المقياس ومحتوياته', 'info');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر حذف المقياس', 'error');
+    }
+    return false;
+  };
+
+  const addSubject = async (data: Partial<Subject>): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/subjects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تمت إضافة المقياس الدراسي بنجاح', 'success');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر إضافة المقياس', 'error');
+    }
+    return false;
+  };
+
+  const addLesson = async (data: Partial<Lesson>): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/lessons', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تمت إضافة الدرس بنجاح', 'success');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر إضافة الدرس', 'error');
+    }
+    return false;
+  };
+
+  const updateLesson = async (id: string, data: Partial<Lesson>): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/lessons/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تم تحديث بيانات ومحتوى الدرس بنجاح', 'success');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر تحديث محتوى الدرس', 'error');
+    }
+    return false;
+  };
+
+  const deleteLesson = async (id: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/lessons/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تم حذف الدرس', 'info');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر حذف الدرس', 'error');
+    }
+    return false;
+  };
+
+  const addPdf = async (data: Partial<PDFFile>): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/pdfs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تم رفع ملف PDF بنجاح', 'success');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر رفع الملف', 'error');
+    }
+    return false;
+  };
+
+  const deletePdf = async (id: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/pdfs/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تم حذف ملف PDF', 'info');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر حذف الملف', 'error');
+    }
+    return false;
+  };
+
+  const addSummary = async (data: Partial<Summary>): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/summaries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تمت إضافة الملخص بنجاح', 'success');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر إضافة الملخص', 'error');
+    }
+    return false;
+  };
+
+  const updateSummary = async (id: string, data: Partial<Summary>): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/summaries/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تم تحديث محتوى الملخص بنجاح', 'success');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر تحديث الملخص', 'error');
+    }
+    return false;
+  };
+
+  const deleteSummary = async (id: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/summaries/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تم حذف الملخص', 'info');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر حذف الملخص', 'error');
+    }
+    return false;
+  };
+
+  const addQuiz = async (data: Partial<Quiz>): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/quizzes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تم إنشاء الاختبار بنجاح', 'success');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر إنشاء الاختبار', 'error');
+    }
+    return false;
+  };
+
+  const deleteQuiz = async (id: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/quizzes/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تم حذف الاختبار', 'info');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر حذف الاختبار', 'error');
+    }
+    return false;
+  };
+
+  const updatePlanPrice = async (planId: string, priceDzd: number): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/subscriptions/plans/${planId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ priceDzd }),
+      });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تم تحديث سعر الخطة بنجاح في قاعدة البيانات', 'success');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر تحديث السعر', 'error');
+    }
+    return false;
+  };
+
+  const broadcastNotification = async (
+    title: string,
+    message: string,
+    type = 'system',
+    link = '/subjects'
+  ): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/admin/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, message, type, link }),
+      });
+      if (res.ok) {
+        await refreshBootstrap();
+        showToast('تم إرسال الإشعار لجميع الطلبة', 'success');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر إرسال الإشعار', 'error');
+    }
+    return false;
+  };
+
+  const updatePlatformSettings = async (settings: Partial<PlatformSettings>): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/admin/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+      });
+      if (res.ok) {
+        setPlatformSettings((prev) => ({ ...prev, ...settings }));
+        showToast('تم حفظ إعدادات المنصة', 'success');
+        return true;
+      }
+    } catch (e) {
+      showToast('تعذر حفظ الإعدادات', 'error');
+    }
+    return false;
+  };
+
+  return (
+    <AppContext.Provider
+      value={{
+        currentUser,
+        setCurrentUser,
+        academicLevels,
+        selectedLevel,
+        setSelectedLevel,
+        subjects,
+        subscriptionPlans,
+        notifications,
+        unreadNotificationsCount,
+        markNotificationsAsRead,
+        studentProgress,
+        platformSettings,
+        isDarkMode,
+        toggleDarkMode,
+        fontScale,
+        setFontScale,
+        currentView,
+        navParams,
+        navigateTo,
+        toasts,
+        showToast,
+        removeToast,
+        premiumModalOpen,
+        setPremiumModalOpen,
+        premiumModalReason,
+        openPremiumModal,
+        pdfViewerModal,
+        openPdfViewer,
+        closePdfViewer,
+        switchDemoUser,
+        toggleLessonCompleted,
+        toggleFavorite,
+        refreshBootstrap,
+        updateSubject,
+        deleteSubject,
+        addSubject,
+        addLesson,
+        updateLesson,
+        deleteLesson,
+        addPdf,
+        deletePdf,
+        addSummary,
+        updateSummary,
+        deleteSummary,
+        addQuiz,
+        deleteQuiz,
+        updatePlanPrice,
+        broadcastNotification,
+        updatePlatformSettings,
+      }}
+    >
+      {children}
+    </AppContext.Provider>
+  );
+}
+
+export function useApp() {
+  const context = useContext(AppContext);
+  if (!context) throw new Error('useApp must be used within an AppProvider');
+  return context;
+}
